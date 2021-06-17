@@ -128,7 +128,7 @@ struct _eventer_jobq_t {
   const char             *queue_name;
   const char             *short_name;
   pthread_mutex_t         lock;
-  int64_t                 consumer_jobs;
+  int32_t                 consumer_jobs;
   pthread_mutex_t         consumer_lock;
   pthread_cond_t          consumer_signal;
   uint32_t                concurrency;

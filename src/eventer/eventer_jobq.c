@@ -111,48 +111,37 @@ static struct ck_malloc malloc_ck_hs = {
 };
 static void
 eventer_jobq_consumer_notify(eventer_jobq_t *jobq) {
-  int64_t consumer_jobs;
-
-  pthread_mutex_lock(&jobq->consumer_lock);
-  jobq->consumer_jobs++;
-  consumer_jobs = jobq->consumer_jobs;
-  pthread_mutex_unlock(&jobq->consumer_lock);
-
-  mtevAssert(consumer_jobs >= 0);
-
-  if (consumer_jobs == 1) {
-    pthread_cond_signal(&jobq->consumer_signal);
-  } else {
-    pthread_cond_broadcast(&jobq->consumer_signal);
-  }
+  ck_pr_add_int(&jobq->consumer_jobs, 1);
 }
 static void
 eventer_jobq_consumer_wait(eventer_jobq_t *jobq) {
-  pthread_mutex_lock(&jobq->consumer_lock);
+  while (true) {
+    const int32_t jobs = ck_pr_load_int(&jobq->consumer_jobs);
 
-  while (jobq->consumer_jobs == 0) {
-    pthread_cond_wait(&jobq->consumer_signal, &jobq->consumer_lock);
+    if (jobs == 0) {
+      pthread_yield();
+    } else {
+      if (ck_pr_cas_int(&jobq->consumer_jobs, jobs, jobs - 1)) {
+        break;
+      }
+    }
   }
-
-  jobq->consumer_jobs--;
-  mtevAssert(jobq->consumer_jobs >= 0);
-  pthread_mutex_unlock(&jobq->consumer_lock);
 }
 static bool
 eventer_jobq_consumer_try_wait(eventer_jobq_t *jobq) {
-  if (pthread_mutex_trylock(&jobq->consumer_lock) == 0) {
-    if (jobq->consumer_jobs == 0) {
-      pthread_mutex_unlock(&jobq->consumer_lock);
-      return false;
-    }
+  while (true) {
+    const int32_t jobs = ck_pr_load_int(&jobq->consumer_jobs);
 
-    jobq->consumer_jobs--;
-    mtevAssert(jobq->consumer_jobs >= 0);
-    pthread_mutex_unlock(&jobq->consumer_lock);
-    return true;
+    if (jobs == 0) {
+      return false;
+    } else {
+      if (ck_pr_cas_int(&jobq->consumer_jobs, jobs, jobs - 1)) {
+        break;
+      }
+    }
   }
 
-  return false;
+  return true;
 }
 static eventer_jobsq_t *
 eventer_jobq_get_sq_nolock(eventer_jobq_t *jobq, uint64_t subqueue) {
