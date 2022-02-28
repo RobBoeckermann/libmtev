@@ -20,6 +20,12 @@ fi
 AC_CANONICAL_HOST
 AC_CONFIG_HEADER(src/mtev_config.h)
 
+AC_ARG_ENABLE([asan],
+    [AS_HELP_STRING([--enable-asan],
+        [Enable address sanitization (requires lmdb-asan if lmdb also enabled)])],
+    enable_asan="$enableval",
+    enable_asan=no)
+
 AC_ARG_ENABLE(coverage,
 	[AC_HELP_STRING([--enable-coverage],
 		[Compile with gcov support])],
@@ -59,6 +65,14 @@ AC_ARG_ENABLE(rdtsc,
 
 : ${CFLAGS="-g -O2 -fno-omit-frame-pointer"}
 : ${CXXFLAGS="-g -O2 -fno-omit-frame-pointer"}
+
+AS_IF([test "x$enable_asan" = "xyes"],
+  [
+    CFLAGS="$CFLAGS -fsanitize=address -fsanitize-recover=address"
+    CXXFLAGS="$CXXFLAGS -fsanitize=address -fsanitize-recover=address"
+  ]
+)
+
 AC_PROG_CC
 AX_CHECK_COMPILE_FLAG([-std=c11],
   [AX_APPEND_FLAG([-std=c11])],
@@ -96,7 +110,7 @@ AC_ARG_ENABLE(luarocks-path,
   [AC_HELP_STRING([--enable-luarock-path],
     [Set a LUA_PATH to see luarocks: (no, LuaJIT)])],
   [LUAROCKS_PATH="$enableval"],
-  [LUAROCKS_PATH=`$LUAROCKS path --lr-path | sed -e 's#[^;]*home[^;]*;##g;'`])
+  [if test -x "$LUAROCKS" ; then LUAROCKS_PATH=`$LUAROCKS path --lr-path | sed -e 's#[^;]*home[^;]*;##g;'`; fi])
 AC_MSG_CHECKING([luarocks LUA_PATH])
 AC_MSG_RESULT([$LUAROCKS_PATH])
 AC_SUBST(LUAROCKS_PATH)
@@ -486,8 +500,9 @@ AS_IF([test "x$enable_zipkin_fq" != "xno"], [
          fi
         ]
     )
-    LIBS=$OLD_LIBS
-])
+    LIBS=$OLD_LIBS],
+    [ZIPKIN_FQ_BUILT=no]
+)
 
 AC_ARG_ENABLE([fq],
     AS_HELP_STRING([--disable-fq], [Disable modules fq]),
@@ -509,8 +524,9 @@ AS_IF([test "x$enable_fq" != "xno"], [
          fi
         ]
     )
-    LIBS=$OLD_LIBS
-])
+    LIBS=$OLD_LIBS],
+    [FQ_BUILT=no]
+)
 
 AC_ARG_ENABLE([amqp],
     AS_HELP_STRING([--disable-amqp], [Disable modules amqp]),
@@ -531,13 +547,17 @@ AS_IF([test "x$enable_amqp" != "xno"], [
          fi
         ]
     )
-    LIBS=$OLD_LIBS
-])
+    LIBS=$OLD_LIBS],
+    [AMQP_BUILT=no]
+)
 
 AC_CHECK_LIB(nghttp2, nghttp2_session_get_stream_user_data, ,
              [ AC_MSG_ERROR([*** libnghttp2 required ***]) ])
+
 AC_ARG_ENABLE([wslay],
-    AS_HELP_STRING([--disable-wslay], [Disable websockets (libwslay)]))
+    AS_HELP_STRING([--disable-wslay], [Disable websockets (libwslay)]),
+    [],
+    [enable_wslay=yes])
 
 AS_IF([test "x$enable_wslay" != "xno"], [
   AC_CHECK_LIB(wslay, wslay_event_context_server_init, [
@@ -564,11 +584,19 @@ AC_CHECK_FUNC(fdwalk, [AC_DEFINE(HAVE_FDWALK, [1], [have fdwalk])], )
 AC_CHECK_LIB(util, openpty, , )
 AC_CHECK_LIB(termcap, tputs, , )
 AC_CHECK_LIB(curses, clear, , [AC_MSG_ERROR([curses not found, but required])])
+
 if test "$enable_lmdb" != "no"; then
-AC_CHECK_LIB(lmdb, mdb_dbi_open,[
-  AC_DEFINE(HAVE_LMDB, [1], [have LMDB])
-  LIBS="-llmdb $LIBS"
-  ], [AC_MSG_ERROR([lmdb not found, but required])])
+  if test "$enable_asan" == "yes"; then
+    AC_CHECK_LIB(lmdb-asan, mdb_dbi_open,[
+      AC_DEFINE(HAVE_LMDB, [1], [have LMDB])
+      LIBS="-llmdb-asan $LIBS"
+      ], [AC_MSG_ERROR([lmdb-asan not found, but required])])
+  else
+    AC_CHECK_LIB(lmdb, mdb_dbi_open,[
+      AC_DEFINE(HAVE_LMDB, [1], [have LMDB])
+      LIBS="-llmdb $LIBS"
+      ], [AC_MSG_ERROR([lmdb not found, but required])])
+  fi
 fi
 
 CPPFLAGS="$CPPFLAGS `pcre-config --cflags`"
@@ -1040,11 +1068,14 @@ AC_MSG_RESULT([
 
   MODULECC:           $MODULECC
   SHCFLAGS:           $SHCFLAGS
-  MODULESHCFLAGS:     $MODULESHCFLAGS
-  MODULESHCXXFLAGS:   $MODULESHCXXFLAGS
 
   MODULELD:           $MODULELD
   MODULESHLDFLAGS:    $MODULESHLDFLAGS
+
+  == Features ==
+  Lua impl:           $ENABLE_LUA
+  Websockets:         $enable_wslay
+  ASAN:               $enable_asan
 
   == Optional modules ==
   AMQP module:        $AMQP_BUILT
